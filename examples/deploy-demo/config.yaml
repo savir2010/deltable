@@ -1,0 +1,4 @@
+# Deploy configuration. The deploy script path is also tracked in Delta Memory
+# (slot deploy_script.path) so every agent workspace shares the current value.
+deploy_script: scripts/deploy.sh
+environment: staging
