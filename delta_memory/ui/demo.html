@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approach Race Traces</title>
+<style>
+:root {
+  --bg: #0d1117; --panel: #11161d; --line: #21262d; --line2: #30363d; --fg: #d6dde4; --dim: #7d8590; --faint: #484f58;
+  --search: #d29922; --read: #8b949e; --edit: #a371f7; --exec: #3fb950; --fail: #f85149;
+  --mread: #58a6ff; --mwrite: #39c5cf; --other: #6e7681;
+  --insert: #3fb950; --noop: #8b949e; --overwrite: #d29922; --append: #58a6ff; --queue: #f85149;
+  --a: #58a6ff; --b: #bc8cff; --win: rgb(63 185 80 / .10);
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #ffffff; --panel: #f6f8fa; --line: #eaeef2; --line2: #d0d7de; --fg: #1f2328; --dim: #656d76; --faint: #afb8c1;
+    --search: #9a6700; --read: #6e7781; --edit: #8250df; --exec: #1a7f37; --fail: #cf222e;
+    --mread: #0969da; --mwrite: #1b7c83; --other: #8c959f;
+    --insert: #1a7f37; --noop: #6e7781; --overwrite: #9a6700; --append: #0969da; --queue: #cf222e;
+    --a: #0969da; --b: #8250df; --win: rgb(26 127 55 / .08);
+  }
+}
+:root[data-theme="light"] {
+  --bg: #ffffff; --panel: #f6f8fa; --line: #eaeef2; --line2: #d0d7de; --fg: #1f2328; --dim: #656d76; --faint: #afb8c1;
+  --search: #9a6700; --read: #6e7781; --edit: #8250df; --exec: #1a7f37; --fail: #cf222e;
+  --mread: #0969da; --mwrite: #1b7c83; --other: #8c959f;
+  --insert: #1a7f37; --noop: #6e7781; --overwrite: #9a6700; --append: #0969da; --queue: #cf222e;
+  --a: #0969da; --b: #8250df; --win: rgb(26 127 55 / .08);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 12.5px/1.5 var(--mono); }
+.wrap { padding: 12px 16px 24px; max-width: 1600px; margin: 0 auto; }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.bar .k { color: var(--dim); } .bar b { font-weight: 600; }
+.bar .sp { flex: 1; }
+button { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line2); border-radius: 4px; padding: 3px 10px; cursor: pointer; }
+button:hover { border-color: var(--dim); } button:disabled { opacity: .45; cursor: default; }
+button.run { border-color: var(--exec); color: var(--exec); font-weight: 600; }
+.seg { display: inline-flex; } .seg button { border-radius: 0; margin-left: -1px; }
+.seg button:first-child { border-radius: 4px 0 0 4px; } .seg button:last-child { border-radius: 0 4px 4px 0; }
+.seg button[aria-checked="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+label.cb { display: inline-flex; gap: 5px; align-items: center; color: var(--dim); }
+button:focus-visible, input:focus-visible { outline: 1px solid var(--mread); outline-offset: 1px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); margin-right: 5px; }
+.dot.run { background: var(--exec); animation: blink 1s steps(2) infinite; } @keyframes blink { 50% { opacity: .3; } }
+.dot.done { background: var(--exec); } .dot.fail { background: var(--fail); }
+h2 { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin: 14px 0 6px; }
+.panel { border: 1px solid var(--line); background: var(--panel); border-radius: 4px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--dim); padding: 6px 10px; border-top: 1px solid var(--line); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.legend i.dia { transform: rotate(45deg) scale(.8); border-radius: 1px; }
+#tl { display: block; width: 100%; }
+#tl text { font: 11px var(--mono); fill: var(--dim); }
+#tl .lanebg { fill: transparent; } #tl .laneline { stroke: var(--line); }
+#tl .tick { stroke: var(--line); } #tl .now { stroke: var(--fg); stroke-dasharray: 2 3; opacity: .5; }
+#tl rect.call { rx: 2; } #tl rect.call.fail { stroke: var(--fail); stroke-width: 1.5; }
+#tl .conn { stroke-width: 1; opacity: .45; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 3px 10px; white-space: nowrap; border-top: 1px solid var(--line); vertical-align: top; }
+th { color: var(--dim); font-weight: 400; border-top: 0; position: sticky; top: 0; background: var(--panel); }
+td.n { text-align: right; font-variant-numeric: tabular-nums; } td.cmd { white-space: pre-wrap; word-break: break-all; max-width: 0; width: 100%; }
+td.win { background: var(--win); } th.win { color: var(--exec); }
+.ok { color: var(--exec); } .bad { color: var(--fail); } .dim { color: var(--dim); } .faint { color: var(--faint); }
+.cat { display: inline-block; min-width: 9ch; }
+.tr { max-height: 320px; overflow: auto; }
+tr.fresh td { animation: fl 1.2s ease-out; } @keyframes fl { from { background: rgb(88 166 255 / .18); } to { background: transparent; } }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 14px; padding: 8px 10px; }
+.kv .k { color: var(--dim); }
+.big { font-size: 20px; font-weight: 600; }
+.cols3 { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.2fr) minmax(0, 0.8fr); gap: 10px; }
+#metrics td.n { white-space: normal; word-break: break-all; }
+.cols3 > div { min-width: 0; }
+.cols3 .panel { overflow: auto; max-height: 360px; }
+#memops td:nth-child(4) { max-width: 16ch; } #memops td, #memops th { padding: 3px 7px; }
+#memops td:nth-child(4), #decision span { white-space: normal; word-break: break-word; }
+#metrics td, #memops td { overflow: hidden; text-overflow: ellipsis; }
+a { color: var(--dim); }
+@media (max-width: 980px) { .grid2, .cols3 { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .dot.run, tr.fresh td { animation: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar">
+    <b>approach-race</b>
+    <span><span class="dot" id="dot"></span><span id="phase">idle</span></span>
+    <span><span class="k">run</span> <b id="rid">—</b></span>
+    <span><span class="k">t+</span><b id="tnow">0.0</b>s</span>
+    <span><span class="k">task</span> fix broken deploy config · verify `sh &lt;path&gt; staging` exit 0</span>
+    <span class="sp"></span>
+    <div class="seg" role="radiogroup" aria-label="agent backend">
+      <button data-mode="cursor" aria-checked="true">cursor-agent</button><button data-mode="scripted" aria-checked="false">scripted</button>
+    </div>
+    <label class="cb"><input type="checkbox" id="save" checked> ingest winner → memorable</label>
+    <button class="run" id="go">▶ run</button>
+    <a href="/console">console</a>
+  </div>
+
+  <h2>trace timeline <span class="faint">· x = seconds since start · bar width = call duration · hover for command</span></h2>
+  <div class="panel">
+    <svg id="tl" height="210" role="img" aria-label="tool-call timeline"></svg>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="cols3">
+    <div>
+      <h2>metrics</h2>
+      <div class="panel"><table id="metrics"></table></div>
+    </div>
+    <div>
+      <h2>delta memory · fix_<span id="rid2">—</span>.*</h2>
+      <div class="panel"><table id="memops"></table></div>
+    </div>
+    <div>
+      <h2>decision</h2>
+      <div class="panel kv" id="decision"><span class="k">status</span><span class="faint">no run yet</span></div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div><h2 style="color:var(--a)">explorer · search the repo</h2><div class="panel tr"><table id="tr-explorer"></table></div></div>
+    <div><h2 style="color:var(--b)">memory-first · ask delta memory</h2><div class="panel tr"><table id="tr-memory"></table></div></div>
+  </div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const CATS = ["search", "read", "edit", "exec", "mem-read", "mem-write", "other"];
+const CVAR = { search: "--search", read: "--read", edit: "--edit", exec: "--exec", "mem-read": "--mread", "mem-write": "--mwrite", other: "--other" };
+const BR = { inserted: "--insert", noop: "--noop", corrected: "--overwrite", appended: "--append", conflict: "--queue", needs_review: "--queue", read: "--mread" };
+const BRNAME = { inserted: "insert", noop: "no-op", corrected: "overwrite", appended: "append", conflict: "queue", needs_review: "queue", read: "read" };
+const AG = { explorer: { lane: 0, color: "--a" }, memory: { lane: 2, color: "--b" } };
+let mode = "cursor", timer = null, seenRows = { explorer: 0, memory: 0 };
+try { mode = localStorage.getItem("race.mode") || "cursor"; } catch {}
+function setMode(m) { mode = m; try { localStorage.setItem("race.mode", m); } catch {}
+  document.querySelectorAll(".seg button").forEach((b) => b.setAttribute("aria-checked", b.dataset.mode === m)); }
+document.querySelectorAll(".seg button").forEach((b) => b.onclick = () => setMode(b.dataset.mode));
+setMode(mode);
+
+$("#legend").innerHTML = CATS.map((c) => `<span><i style="background:var(${CVAR[c]})"></i>${c}</span>`).join("")
+  + `<span class="faint">│</span>` + ["inserted", "noop", "corrected", "conflict", "read"].map((b) =>
+    `<span><i class="dia" style="background:var(${BR[b]})"></i>mem ${BRNAME[b]}</span>`).join("");
+
+function drawTimeline(r) {
+  const svg = $("#tl"), W = svg.clientWidth || 1200, L = 110, R = 16, H = 210;
+  const lanes = [{ y: 18, h: 50, name: "explorer", col: css("--a") }, { y: 88, h: 34, name: "delta memory", col: css("--mwrite") },
+                 { y: 142, h: 50, name: "memory-first", col: css("--b") }];
+  const ends = [];
+  Object.values(r.lanes || {}).forEach((l) => (l.trace || []).forEach((c) => ends.push(c.t + c.ms / 1000)));
+  (r.mem_events || []).forEach((m) => ends.push(m.t));
+  const T = Math.max(10, r.t_now || 0, ...ends) * 1.04;
+  const sx = (W - L - R) / T, X = (t) => L + Math.max(0, t) * sx;
+  let g = "";
+  const raw = T / 10, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 5, 10].map((m) => m * mag).find((v) => v >= raw) || 10 * mag;  // ~10 ticks at any scale
+  for (let t = 0; t <= T; t += step) g += `<line class="tick" x1="${X(t)}" x2="${X(t)}" y1="10" y2="${H - 14}"/><text x="${X(t) + 2}" y="${H - 3}">${t}s</text>`;
+  lanes.forEach((ln) => g += `<line class="laneline" x1="${L}" x2="${W - R}" y1="${ln.y + ln.h}" y2="${ln.y + ln.h}"/>
+    <text x="8" y="${ln.y + ln.h / 2 + 4}" style="fill:${ln.col}">${ln.name}</text>`);
+  Object.entries(AG).forEach(([k, a]) => {
+    const ln = lanes[a.lane], tr = ((r.lanes || {})[k] || {}).trace || [];
+    // stack overlapping calls on two rows so short calls stay visible
+    tr.forEach((c, i) => {
+      const x = X(c.t), w = Math.max(3, (c.ms / 1000) * sx), y = ln.y + 6 + (i % 2) * 20;
+      const fail = c.ok === false;
+      g += `<rect class="call ${fail ? "fail" : ""}" x="${x}" y="${y}" width="${w}" height="16" fill="${css(fail && c.cat === "exec" ? "--fail" : CVAR[c.cat])}">
+        <title>${esc(`t+${c.t}s · ${c.ms}ms · ${c.cat}${c.exit != null ? " · exit " + c.exit : ""}\n${c.cmd}`)}</title></rect>`;
+    });
+  });
+  const mem = lanes[1];
+  (r.mem_events || []).forEach((m) => {
+    const x = X(m.t), cy = mem.y + mem.h / 2, a = AG[m.who], src = a ? lanes[a.lane] : null, c = css(BR[m.branch] || "--other");
+    if (src) g += `<line class="conn" x1="${x}" x2="${x}" y1="${a.lane === 0 ? src.y + src.h : src.y}" y2="${cy}" stroke="${css(a.color)}"/>`;
+    const s = m.branch === "read" ? 4 : 6;
+    g += `<rect x="${x - s}" y="${cy - s}" width="${2 * s}" height="${2 * s}" transform="rotate(45 ${x} ${cy})"
+      fill="${m.branch === "read" ? "none" : c}" stroke="${c}" stroke-width="1.5">
+      <title>${esc(`t+${m.t}s · ${m.who} · ${m.tool} ${m.key}${m.value != null ? " = " + JSON.stringify(m.value) : ""}\n→ ${m.result}`)}</title></rect>`;
+  });
+  if (r.status === "running" && r.t_now > 0) g += `<line class="now" x1="${X(r.t_now)}" x2="${X(r.t_now)}" y1="10" y2="${H - 14}"/>`;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = g;
+}
+
+const fmt = (v, d = "—") => v == null ? `<span class="faint">${d}</span>` : typeof v === "number" ? v.toLocaleString() : esc(v);
+
+function drawMetrics(r) {
+  const L = r.lanes || {}, res = r.results || {}, w = r.winner;
+  const rows = [
+    ["outcome", (k) => res[k] ? (res[k].outcome.correct ? '<span class="ok">✓ correct</span>' : '<span class="bad">✗ wrong</span>') : fmt(null, "pending")],
+    ["config →", (k) => res[k] ? esc(res[k].outcome.config_points_to || "∅") : fmt(null)],
+    ["deploy exit 0", (k) => res[k] ? (res[k].outcome.deploy_works ? '<span class="ok">yes</span>' : '<span class="bad">no</span>') : fmt(null)],
+    ["wall s", (k) => fmt(L[k] && L[k].seconds)],
+    ["tool calls", (k) => fmt(L[k] && L[k].step_count)],
+    ["failed calls", (k) => L[k] ? (L[k].trace.filter((c) => c.ok === false).length ? `<span class="bad">${L[k].trace.filter((c) => c.ok === false).length}</span>` : "0") : fmt(null)],
+    ["mem reads", (k) => L[k] ? L[k].trace.filter((c) => c.cat === "mem-read").length : fmt(null)],
+    ["mem writes", (k) => L[k] ? L[k].trace.filter((c) => c.cat === "mem-write").length : fmt(null)],
+    ["tokens in", (k) => fmt(L[k] && L[k].input_tokens)],
+    ["tokens out", (k) => fmt(L[k] && L[k].output_tokens)],
+    ["tokens cached", (k) => fmt(L[k] && L[k].cached)],
+    ["tokens total", (k) => fmt(L[k] && L[k].tokens)],
+  ];
+  $("#metrics").innerHTML = `<tr><th></th>${["explorer", "memory"].map((k) => `<th class="${k === w ? "win" : ""}" style="color:var(${AG[k].color})">${k === "memory" ? "memory-first" : k}${k === w ? " ★" : ""}</th>`).join("")}</tr>`
+    + rows.map(([n, f]) => `<tr><td class="dim">${n}</td>${["explorer", "memory"].map((k) => `<td class="n ${k === w ? "win" : ""}">${f(k)}</td>`).join("")}</tr>`).join("");
+}
+
+function drawMemory(r) {
+  const ev = (r.mem_events || []).filter((m) => m.tool === "delta_write" || m.key === "deploy_script.path");
+  $("#memops").innerHTML = `<tr><th>t+</th><th>agent</th><th>key</th><th>value</th><th>branch</th></tr>` + (ev.map((m) =>
+    `<tr><td class="n">${m.t.toFixed(1)}</td><td style="color:var(${(AG[m.who] || {}).color || "--dim"})">${esc(m.who)}</td>
+     <td>${esc(m.key.replace(/^fix_\d+\./, ""))}</td><td class="dim">${esc(m.value != null ? JSON.stringify(m.value) : "")}</td>
+     <td style="color:var(${BR[m.branch] || "--dim"})">${esc(BRNAME[m.branch] || m.branch)}</td></tr>`).join("")
+    || `<tr><td class="faint" colspan="5">no memory ops yet</td></tr>`)
+    + (r.shared && r.shared.value ? `<tr><td class="dim" colspan="2">converged</td><td>script_location</td><td colspan="2" class="ok">${esc(r.shared.value)} @ v${r.shared.version}</td></tr>` : "");
+}
+
+function drawDecision(r) {
+  const e = r.economics, rows = [];
+  rows.push(["phase", esc(r.phase)]);
+  if (r.problem) rows.push(["ground truth", esc(r.problem.real)], ["decoy", esc(r.problem.decoy)]);
+  if (r.recalled !== undefined) rows.push(["memorable recall", r.recalled ? '<span class="ok">hit</span>' : '<span class="dim">miss → race</span>']);
+  if (r.phase === "skipped") rows.push(["action", 'skip race: reuse remembered procedure <button id="force">race anyway</button>']);
+  if (r.winner) rows.push(["winner", `<b style="color:var(${AG[r.winner].color})">${r.winner === "memory" ? "memory-first" : r.winner}</b> <span class="dim">(correct first, then fewer ${e ? e.unit : "tokens"})</span>`]);
+  if (r.phase === "done") rows.push(["memorable", r.saved ? `<span class="ok">ingested</span> ${esc(r.saved)}` : '<span class="dim">not ingested</span>'],
+    ["discarded", esc((r.discarded || []).map((d) => d === "memory" ? "memory-first" : d).join(", ") || "—")]);
+  if (e) rows.push(["race cost", `${e.race_cost.toLocaleString()} ${e.unit}`], ["extra vs single", `${e.extra_cost.toLocaleString()} ${e.unit}`],
+    ["judge cost", "0 (programmatic check)"], ["saving / reuse", `${e.saving_per_reuse.toLocaleString()} ${e.unit}`],
+    ["break-even", e.break_even_reuses ? `<b>${e.break_even_reuses}</b> reuses` : '<span class="bad">never (winner not cheaper)</span>']);
+  if (r.error) rows.push(["error", `<span class="bad">${esc(r.error)}</span>`]);
+  $("#decision").innerHTML = rows.map(([k, v]) => `<span class="k">${k}</span><span>${v}</span>`).join("");
+  const f = $("#force"); if (f) f.onclick = () => start(true);
+}
+
+function drawTrace(k, l) {
+  const tr = (l || {}).trace || [];
+  $(`#tr-${k}`).innerHTML = `<tr><th>t+</th><th>ms</th><th>type</th><th>command</th><th>exit</th></tr>` + (tr.map((c, i) =>
+    `<tr class="${i >= seenRows[k] ? "fresh" : ""}"><td class="n">${c.t.toFixed(1)}</td><td class="n dim">${c.ms}</td>
+     <td><span class="cat" style="color:var(${CVAR[c.cat]})">${c.cat}</span></td><td class="cmd">${esc(c.cmd)}</td>
+     <td class="n ${c.ok === false ? "bad" : c.exit === 0 ? "ok" : "dim"}">${c.exit ?? (c.ok === false ? "err" : "")}</td></tr>`).join("")
+    || `<tr><td class="faint" colspan="5">no calls yet</td></tr>`);
+  const box = $(`#tr-${k}`).parentElement; if (tr.length > seenRows[k]) box.scrollTop = box.scrollHeight;
+  seenRows[k] = tr.length;
+}
+
+async function poll() {
+  let r; try { r = await (await fetch("/api/race")).json(); } catch { $("#phase").textContent = "server unreachable"; return; }
+  $("#go").disabled = r.status === "running";
+  $("#dot").className = "dot " + (r.status === "running" ? "run" : r.status === "done" ? "done" : r.status === "failed" ? "fail" : "");
+  $("#phase").textContent = r.status === "running" ? r.phase : r.status === "idle" ? (r.rid ? `last run · ${r.phase}` : "idle") : r.status;
+  $("#rid").textContent = r.rid || "—"; $("#rid2").textContent = r.rid || "—";
+  $("#tnow").textContent = (r.t_now || 0).toFixed(1);
+  drawTimeline(r); drawMetrics(r); drawMemory(r); drawDecision(r);
+  drawTrace("explorer", (r.lanes || {}).explorer); drawTrace("memory", (r.lanes || {}).memory);
+  if (r.status !== "running" && timer) { clearInterval(timer); timer = null; }
+}
+
+async function start(force = false) {
+  $("#go").disabled = true; seenRows = { explorer: 0, memory: 0 };
+  await fetch("/api/race", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode, save: $("#save").checked, force }) });
+  if (!timer) timer = setInterval(poll, 600);
+  poll();
+}
+$("#go").onclick = () => start(false);
+addEventListener("resize", () => poll());
+poll();
+fetch("/api/race").then((r) => r.json()).then((r) => { if (r.status === "running" && !timer) timer = setInterval(poll, 600); });
+</script>
+</body>
+</html>
