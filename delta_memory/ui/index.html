@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delta Memory Console</title>
+<style>
+:root {
+  --bg: #0b0d0e; --panel: #101315; --line: #1f2528; --line-2: #2a3135;
+  --fg: #cfd6dc; --dim: #6c7780; --faint: #3a4247;
+  --ok: #7ee787; --ok-bg: 126 231 135; --warn: #e3b341; --warn-bg: 227 179 65;
+  --info: #79c0ff; --err: #ff7b72; --sel: #16201a;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f6f7f8; --panel: #ffffff; --line: #e3e6e8; --line-2: #d3d8db;
+    --fg: #1d2327; --dim: #6a737b; --faint: #b9c0c5;
+    --ok: #1a7f37; --ok-bg: 26 127 55; --warn: #9a6700; --warn-bg: 154 103 0;
+    --info: #0969da; --err: #cf222e; --sel: #eef6f0;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f6f7f8; --panel: #ffffff; --line: #e3e6e8; --line-2: #d3d8db;
+  --fg: #1d2327; --dim: #6a737b; --faint: #b9c0c5;
+  --ok: #1a7f37; --ok-bg: 26 127 55; --warn: #9a6700; --warn-bg: 154 103 0;
+  --info: #0969da; --err: #cf222e; --sel: #eef6f0;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg); color: var(--fg); font: 12.5px/1.5 var(--mono);
+  display: grid; grid-template-rows: auto 1fr minmax(180px, 34vh); grid-template-columns: minmax(0, 1fr);
+  height: 100vh; overflow: hidden;
+}
+header, main, #term { min-width: 0; }
+button { font: inherit; color: inherit; background: none; border: 1px solid var(--line-2);
+  padding: 0 6px; cursor: pointer; border-radius: 2px; }
+button:hover { border-color: var(--fg); }
+button:focus-visible, input:focus-visible { outline: 1px solid var(--info); outline-offset: 1px; }
+
+/* header */
+header { display: flex; align-items: center; gap: 18px; padding: 6px 14px;
+  border-bottom: 1px solid var(--line); white-space: nowrap; overflow-x: auto; }
+.brand { color: var(--ok); font-weight: 600; }
+.live::before { content: "●"; margin-right: 6px; color: var(--ok); }
+.live.down::before { color: var(--err); }
+.kv { color: var(--dim); } .kv b { color: var(--fg); font-weight: 400; }
+.tabs { margin-left: auto; display: flex; gap: 6px; }
+.tabs button[aria-selected="true"] { color: var(--bg); background: var(--fg); border-color: var(--fg); }
+
+/* panes */
+main { min-height: 0; display: grid; overflow: hidden; }
+.view { min-height: 0; height: 100%; display: none; }
+.view.on { display: grid; }
+#memory { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
+#compose { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); }
+.pane { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+.pane:last-child { border-right: 0; }
+.stack { display: grid; grid-template-rows: minmax(0, 1.4fr) minmax(0, 1fr); min-height: 0; }
+.stack > .pane { border-right: 0; border-bottom: 1px solid var(--line); }
+.stack > .pane:last-child { border-bottom: 0; }
+.ph { display: flex; gap: 10px; align-items: center; padding: 5px 12px; color: var(--dim);
+  border-bottom: 1px solid var(--line); text-transform: lowercase; }
+.ph .t { color: var(--fg); }
+.ph .r { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.body { overflow: auto; min-height: 0; padding: 4px 0; }
+
+/* slots */
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 2px 12px; white-space: nowrap; }
+th { color: var(--dim); font-weight: 400; position: sticky; top: 0; background: var(--bg); }
+td.v { color: var(--ok); max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+td.src { max-width: 24ch; overflow: hidden; text-overflow: ellipsis; color: var(--dim); }
+td.n { text-align: right; color: var(--dim); }
+tr.tr td { color: var(--dim); } tr.tr td.v { color: var(--info); }
+@keyframes flash { from { background: rgb(var(--ok-bg) / .28); } to { background: transparent; } }
+.flash { animation: flash 1.6s ease-out; }
+
+/* log */
+.row { padding: 1px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .ts { color: var(--faint); } .row .ver { color: var(--dim); }
+.k-insert { color: var(--dim); } .k-correction { color: var(--ok); }
+.k-reconcile { color: var(--info); } .k-append { color: var(--info); }
+.arrow { color: var(--dim); }
+.pend { padding: 4px 12px; border-left: 2px solid var(--warn); margin: 3px 8px;
+  background: rgb(var(--warn-bg) / .06); }
+.pend .h { color: var(--warn); }
+.pend .acts { margin-top: 3px; display: flex; gap: 6px; }
+.empty { color: var(--faint); padding: 4px 12px; }
+
+/* compose */
+.ctl { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.ctl label { color: var(--dim); display: flex; gap: 6px; align-items: center; }
+.ctl input, .ctl select { font: inherit; color: var(--fg); background: var(--panel);
+  border: 1px solid var(--line-2); padding: 1px 6px; border-radius: 2px; width: 13ch; }
+.trace { padding: 8px 12px; }
+.hop { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; }
+.node { color: var(--fg); }
+.node.start { color: var(--info); } .node.goal { color: var(--ok); }
+.edge { color: var(--dim); padding-left: 2ch; }
+.edge .ctxn { color: var(--warn); } .edge .ep { color: var(--faint); }
+.check { margin-top: 10px; border-top: 1px dashed var(--line-2); padding-top: 8px; }
+.check div { display: flex; gap: 8px; }
+.pass { color: var(--ok); } .fail { color: var(--err); } .note { color: var(--dim); }
+.grids { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 10px 12px; align-content: start; }
+.grid h4 { margin: 0 0 6px; font-weight: 400; color: var(--dim); }
+.grid h4 b { color: var(--fg); font-weight: 400; }
+.hm { display: grid; gap: 1px; }
+.hm .c { aspect-ratio: 1; background: var(--panel); border: 1px solid var(--line); position: relative;
+  font-size: 9px; display: grid; place-items: center; color: transparent; min-width: 0; }
+.hm .c.hot { color: var(--bg); }
+.hm .c.path { outline: 1px solid var(--info); outline-offset: -1px; }
+.hm .c.goal { outline: 2px solid var(--warn); outline-offset: -2px; }
+.hm .lab { color: var(--dim); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: flex; align-items: center; }
+.hm .lab.col { justify-content: center; }
+.legend { color: var(--faint); margin-top: 8px; font-size: 11px; line-height: 1.6; }
+.legend span { color: var(--dim); }
+
+/* run view */
+#run { grid-template-rows: auto auto 1fr auto; overflow: auto; padding: 14px 18px; gap: 14px; align-content: start; }
+.runbar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.go { font-size: 13px; padding: 6px 14px; border-color: var(--ok); color: var(--ok); }
+.go:disabled { opacity: .45; cursor: default; }
+.narr { color: var(--fg); } .narr .note { margin-left: 8px; }
+.mem { border: 1px solid var(--line-2); background: var(--panel); padding: 12px 16px; display: grid;
+  grid-template-columns: 1fr auto; gap: 4px 16px; align-items: baseline; }
+.mem .lbl { color: var(--dim); grid-column: 1 / -1; }
+.mem .val { font-size: 20px; color: var(--ok); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem .ver { font-size: 20px; color: var(--fg); }
+.mem .was { grid-column: 1 / -1; color: var(--dim); min-height: 1.5em; }
+.mem .was s { color: var(--faint); }
+.raw { grid-column: 1 / -1; margin-top: 8px; border-top: 1px dashed var(--line-2); padding-top: 6px; }
+.rh { color: var(--dim); margin: 6px 0 2px; }
+.rt td { padding: 1px 10px 1px 0; vertical-align: top; white-space: nowrap; }
+.rt td.res { white-space: nowrap; }
+.rt tr.r-orch td { color: var(--faint) !important; }
+.scroll { max-height: 230px; overflow: auto; }
+.rt td.w { white-space: normal; word-break: break-word; }
+.rt tr.r-corrected td.res, .rt tr.r-correction td.k { color: var(--ok); }
+.rt tr.r-conflict td.res, .rt tr.r-open td.k, .rt tr.r-rejected td.k { color: var(--warn); }
+.rt tr.r-read td.res { color: var(--dim); }
+.rt tr.new { animation: flash 1.6s ease-out; }
+.term { margin: 0; padding: 8px 12px; white-space: pre-wrap; word-break: break-word; font: inherit; font-size: 11.5px;
+  color: var(--dim); overflow: auto; max-height: 340px; }
+.term .hl-ok { color: var(--ok); } .term .hl-warn { color: var(--warn); } .term .hl-info { color: var(--info); }
+.term .hl-cmd { color: var(--fg); }
+.lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.lane { border: 1px solid var(--line); min-height: 170px; display: flex; flex-direction: column; }
+.lane .lh { padding: 7px 12px; border-bottom: 1px solid var(--line); }
+.lane .lh b { font-weight: 600; } .lane .lh .note { display: block; }
+.lane ol { list-style: none; margin: 0; padding: 6px 0; }
+.lane li { padding: 3px 12px; display: grid; grid-template-columns: 8ch 1fr; gap: 8px; }
+.lane li .t { color: var(--faint); }
+.lane li.k-read, .lane li.k-wait, .lane li.k-start, .lane li.k-done { color: var(--dim); }
+.lane li.k-corrected, .lane li.k-ok { color: var(--ok); }
+.lane li.k-live { color: var(--info); }
+.lane li.k-blocked { color: var(--warn); background: rgb(var(--warn-bg) / .08); }
+.lane li.k-err { color: var(--err); }
+.lane .idle { color: var(--faint); padding: 8px 12px; }
+.checks div { display: flex; gap: 8px; }
+@keyframes pop { from { background: rgb(var(--ok-bg) / .25); } to { background: var(--panel); } }
+.mem.flash { animation: pop 1.6s ease-out; }
+button.armed { color: var(--warn); border-color: var(--warn); }
+/* run view keeps the page calm: terminal collapses to its prompt line */
+body.runview { grid-template-rows: auto 1fr auto; }
+body.runview #out { display: none; }
+
+/* run v2 */
+#run { display: block; }
+.view.on#run { display: block; overflow: auto; padding: 14px 18px 18px; }
+#run > * + * { margin-top: 14px; }
+.runbar { display: flex; flex-direction: column; gap: 8px; }
+.task b { font-weight: 600; }
+.ctlrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 2px; }
+.seg button { border: 0; padding: 3px 10px; }
+.seg button[aria-checked="true"] { background: var(--fg); color: var(--bg); }
+.lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.lane { border: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
+.lane .lh { padding: 6px 12px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; }
+.lane .term { height: 230px; max-height: none; }
+.cards { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 12px; }
+.card { border: 1px solid var(--line-2); background: var(--panel); padding: 10px 14px; min-width: 0; }
+.card .ch { color: var(--fg); margin-bottom: 8px; } .card .ch .note { margin-left: 6px; }
+details.card > summary { cursor: pointer; list-style: none; margin: 0; }
+details.card[open] > summary { margin-bottom: 8px; }
+.foot { margin-top: 10px; font-size: 11px; line-height: 1.5; }
+.pw { display: grid; grid-template-columns: auto 10px minmax(0, 1fr); gap: 0 8px; align-items: stretch; }
+.lhs { align-self: center; color: var(--fg); white-space: nowrap; }
+.brace { border: 1px solid var(--line-2); border-right: 0; border-radius: 8px 0 0 8px; }
+.case { display: grid; grid-template-columns: 9ch minmax(0, 1fr) 3ch; gap: 2px 10px; padding: 5px 8px; border-left: 2px solid transparent; }
+.case .nm { font-weight: 600; } .case .cond { color: var(--dim); } .case .n { text-align: right; color: var(--faint); }
+.case .eff { grid-column: 2 / 3; color: var(--dim); font-size: 11.5px; }
+.case .hit { grid-column: 1 / -1; font-size: 11.5px; color: var(--faint); min-height: 1.4em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.case.on { border-left-color: currentColor; background: rgb(var(--ok-bg) / .04); }
+.case.on .n { color: var(--fg); }
+.case.b-insert { color: var(--info); } .case.b-noop { color: var(--dim); } .case.b-append { color: var(--info); }
+.case.b-overwrite { color: var(--ok); } .case.b-queue { color: var(--warn); }
+.case .cond, .case .eff { color: var(--dim); } .case.on .hit { color: var(--fg); }
+@keyframes glow { from { background: rgb(var(--ok-bg) / .22); } to { background: rgb(var(--ok-bg) / .04); } }
+.case.flash { animation: glow 1.4s ease-out; }
+.chain { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 0; margin-top: 4px; }
+.node2 { border: 1px solid var(--line-2); padding: 3px 9px; border-radius: 2px; white-space: nowrap; }
+.node2.end { border-color: var(--ok); color: var(--ok); } .node2.start { border-color: var(--info); color: var(--info); }
+.node2.ghost { color: var(--faint); border-style: dashed; }
+.arr { display: flex; flex-direction: column; align-items: center; padding: 0 6px; color: var(--dim); font-size: 11px; min-width: 9ch; }
+.arr .by { color: var(--faint); } .arr .line { color: var(--dim); }
+.impl { margin-top: 12px; border-top: 1px dashed var(--line-2); padding-top: 10px; display: grid; gap: 6px; }
+.impl .big { color: var(--warn); } .impl .big b { color: var(--fg); font-weight: 600; }
+.facts td { padding-right: 14px; }
+@media (max-width: 900px) { .lanes, .cards { grid-template-columns: 1fr; } }
+
+/* terminal */
+#term { border-top: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
+#out { flex: 1; overflow: auto; padding: 6px 14px; white-space: pre-wrap; word-break: break-word; }
+#out .ok { color: var(--ok); } #out .warn { color: var(--warn); } #out .err { color: var(--err); }
+#out .dim { color: var(--dim); } #out .cmd { color: var(--fg); } #out .cmd::before { content: "dm › "; color: var(--info); }
+.prompt { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-top: 1px solid var(--line); }
+.prompt span { color: var(--info); }
+#in { flex: 1; font: inherit; color: var(--fg); background: transparent; border: 0; outline: 0; caret-color: var(--ok); }
+.hint { color: var(--faint); }
+
+.prompt > span:first-child { white-space: nowrap; }
+@media (max-width: 900px) {
+  body { grid-template-rows: auto minmax(0, 1fr) minmax(140px, 36vh); }
+  .view.on { display: block; overflow: auto; }
+  .stack { display: block; }
+  .pane, .stack > .pane { border-right: 0; border-bottom: 1px solid var(--line); min-height: 220px; max-height: 70vh; }
+  .grids { grid-template-columns: 1fr; }
+  .lanes { grid-template-columns: 1fr; }
+  #run { padding: 12px 16px; }
+  header { flex-wrap: wrap; row-gap: 2px; gap: 4px 12px; padding: 6px 16px; }
+  header .opt, .prompt .hint { display: none; }
+  .tabs { margin-left: 0; }
+  #out, .prompt, .ph, .ctl, .trace, .row, th, td { padding-left: 16px; padding-right: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { .flash { animation: none; } }
+</style>
+</head>
+<body class="runview">
+<header>
+  <span class="brand">▍delta-memory</span>
+  <span class="live" id="live">live</span>
+  <span class="kv">pid <b id="pid">—</b></span>
+  <span class="kv opt">mcp <b>127.0.0.1:8787/mcp</b></span>
+  <span class="kv opt">db <b id="db">—</b></span>
+  <span class="kv" title="delta_write calls over MCP since this server started">mcp writes <b id="writes">0</b></span>
+  <span class="kv opt">up <b id="up">—</b></span>
+  <nav class="tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-view="run">1 run</button>
+    <button role="tab" aria-selected="false" data-view="memory">2 memory</button>
+    <button role="tab" aria-selected="false" data-view="compose">3 compose</button>
+  </nav>
+</header>
+
+<main>
+  <section class="view on" id="run">
+    <div class="runbar">
+      <div class="task"><span class="note">task</span> <b id="task">ship a release of deploy-demo</b>
+        <span class="note">· 3 agents in 3 Superset workspaces, in parallel · 1 shared memory</span></div>
+      <div class="ctlrow">
+        <div class="seg" role="radiogroup" aria-label="agents">
+          <button data-mode="cursor" aria-checked="true">cursor agents</button>
+          <button data-mode="scripted" aria-checked="false">scripted</button>
+        </div>
+        <button class="go" id="go">▶ run</button>
+        <span class="narr" id="narr"></span>
+      </div>
+    </div>
+
+    <div class="lanes" id="lanes"></div>
+
+    <div class="cards">
+      <div class="card" id="rule">
+        <div class="ch">the delta rule <span class="note">how memory applies each write: never a blind append</span></div>
+        <div class="pw">
+          <div class="lhs">Δ(key, value) =</div>
+          <div class="brace"></div>
+          <div class="cases" id="cases"></div>
+        </div>
+        <div class="foot note">error = typed difference between the new value and what memory holds (numbers: signed diff · paths/ids: exact match · text: embedding distance)</div>
+      </div>
+      <div class="card" id="imp">
+        <div class="ch">implied understanding <span class="note">each agent learned one step; memory composes the rest</span></div>
+        <div id="chain" class="chain"></div>
+        <div id="impl" class="impl"></div>
+        <div class="foot note">each step is a delta-rule write into a matrix S: S ← S + β(v − S·k)kᵀ. Values live in the same space as keys, so applying S repeatedly follows the chain. Symbolic, not a trained network.</div>
+      </div>
+    </div>
+
+    <div class="card facts">
+      <div class="ch">memory now</div>
+      <table class="rt"><tbody id="facts"><tr><td class="empty">press run</td></tr></tbody></table>
+    </div>
+
+    <div class="checks" id="checks"></div>
+    <details class="card"><summary class="ch">server log <span class="note">every call the delta-memory server received this run</span></summary>
+      <div class="scroll" id="callsbox"><table class="rt"><tbody id="calls"></tbody></table></div></details>
+  </section>
+
+  <section class="view" id="memory">
+    <div class="pane">
+      <div class="ph"><span class="t">slots</span><span id="nslots">0</span>
+        <span class="r"><label><input type="checkbox" id="showtr"> transitions</label></span></div>
+      <div class="body"><table>
+        <thead><tr><th>key</th><th>value</th><th>type</th><th class="n">v</th><th>source</th><th class="n">conf</th></tr></thead>
+        <tbody id="slots"></tbody></table></div>
+    </div>
+    <div class="stack">
+      <div class="pane">
+        <div class="ph"><span class="t">correction log</span><span>append-only · newest first</span></div>
+        <div class="body" id="log"></div>
+      </div>
+      <div class="pane">
+        <div class="ph"><span class="t">pending reconciliation</span><span id="npend">0</span></div>
+        <div class="body" id="pending"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="compose">
+    <div class="pane">
+      <div class="ctl">
+        <label>ns <select id="ns"></select></label>
+        <label>start <input id="cstart" value="build"></label>
+        <label>goal <input id="cgoal" value="kubernetes"></label>
+        <button id="cgo">compose</button>
+        <button id="cdemo" title="fresh isolated namespace">new demo run</button>
+      </div>
+      <div class="body trace" id="trace"><div class="empty">type <b>demo</b> below, or pick a namespace and compose</div></div>
+    </div>
+    <div class="pane">
+      <div class="ph"><span class="t">association matrix</span><span>⟨v<sub>j</sub>, T·k<sub>i</sub>⟩ · rows = key state · cols = value state</span></div>
+      <div class="body"><div class="grids" id="grids"></div><div class="legend" id="legend" style="padding:0 12px 10px"></div></div>
+    </div>
+  </section>
+</main>
+
+<section id="term" aria-label="terminal">
+  <div id="out"></div>
+  <div class="prompt"><span>dm ›</span>
+    <input id="in" autocomplete="off" spellcheck="false" aria-label="command"
+      placeholder="help · read deploy_script path · demo · race · compose build kubernetes --ns r…">
+    <span class="hint">↑↓ history · / focus · 1/2/3 views</span></div>
+</section>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const hhmmss = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour12: false }); };
+const short = (v) => typeof v === "string" ? `'${v}'` : JSON.stringify(v);
+
+let seen = { slots: {}, log: 0 }, first = true, compose = { ns: "", start: "build", goal: "kubernetes" };
+
+/* ---------- tabs ---------- */
+function view(name) {
+  document.body.classList.toggle("runview", name === "run");
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("on", v.id === name));
+  document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.view === name));
+  try { localStorage.setItem("dm.view", name); } catch {}
+  if (name === "compose") loadCompose();
+}
+document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => view(b.dataset.view));
+
+/* ---------- memory view ---------- */
+async function poll() {
+  try {
+    const s = await (await fetch("/api/state")).json();
+    $("#live").classList.remove("down"); $("#live").textContent = "live";
+    $("#pid").textContent = s.server.pid; $("#db").textContent = s.server.db;
+    $("#writes").textContent = s.server.writes;
+    const u = s.server.uptime_s; $("#up").textContent = `${String(Math.floor(u / 3600)).padStart(2, "0")}:${String(Math.floor(u / 60) % 60).padStart(2, "0")}:${String(u % 60).padStart(2, "0")}`;
+    renderSlots(s.slots); renderLog(s.log); renderPending(s.pending); renderNs(s.namespaces);
+    first = false;
+  } catch { $("#live").classList.add("down"); $("#live").textContent = "server unreachable"; }
+}
+
+function renderSlots(slots) {
+  const showTr = $("#showtr").checked;
+  const rows = slots.filter((s) => showTr || !s.transition)
+    .sort((a, b) => (a.transition - b.transition) || b.updated_at.localeCompare(a.updated_at));
+  $("#nslots").textContent = rows.length;
+  $("#slots").innerHTML = rows.map((s) => {
+    const key = `${s.entity_id}.${s.predicate}`, changed = !first && seen.slots[key] !== undefined && seen.slots[key] !== s.version;
+    return `<tr class="${s.transition ? "tr" : ""} ${changed ? "flash" : ""}"><td>${esc(key)}</td>
+      <td class="v" title="${esc(JSON.stringify(s.value.data))}">${esc(short(s.value.data))}</td>
+      <td class="n" style="text-align:left">${s.value.type}</td><td class="n">${s.version}</td>
+      <td class="src" title="${esc(s.source)}">${esc(s.source)}</td><td class="n">${s.confidence.toFixed(2)}</td></tr>`;
+  }).join("") || `<tr><td class="empty" colspan="6">no slots yet: try write deploy_script path scripts/deploy.sh</td></tr>`;
+  slots.forEach((s) => seen.slots[`${s.entity_id}.${s.predicate}`] = s.version);
+}
+
+const isTr = (e) => /^tr[a-z0-9]*_/.test(e);
+function renderLog(log) {
+  const top = log.length ? log[0].id : 0;
+  const showTr = $("#showtr").checked;
+  const rows = log.filter((c) => showTr || !isTr(c.entity_id));
+  $("#log").innerHTML = rows.map((c) => `<div class="row ${!first && c.id > seen.log ? "flash" : ""}">
+    <span class="ts">${hhmmss(c.timestamp)}</span> <span class="ver">v${c.version_from}→v${c.version_to}</span>
+    <span class="k-${c.kind}">${c.kind.padEnd(10)}</span> ${esc(c.entity_id)}.${esc(c.predicate)}
+    ${c.old_value ? `${esc(short(c.old_value.data))} <span class="arrow">→</span> ` : ""}${esc(short(c.new_value.data))}
+    <span class="ts">· ${esc(c.source)}</span></div>`).join("") ||
+    `<div class="empty">${log.length ? "only transition writes recently: tick transitions to see them" : "no corrections yet"}</div>`;
+  seen.log = Math.max(seen.log, top);
+}
+
+let armed = null;  // {act, id, until}: first click arms, second click within 3s applies
+function renderPending(p) {
+  if (armed && Date.now() > armed.until) armed = null;
+  const btn = (act, id) => {
+    const on = armed && armed.act === act && armed.id === id;
+    return `<button data-act="${act}" data-id="${id}" class="${on ? "armed" : ""}">${on ? `confirm ${act}?` : act}</button>`;
+  };
+  $("#npend").textContent = p.length;
+  $("#pending").innerHTML = p.map((x) => `<div class="pend">
+    <div><span class="h">#${x.id}</span> ${esc(x.entity_id)}.${esc(x.predicate)}
+      <span class="note">read v${x.read_version}, slot at v${x.current_version} · ${esc(x.source)}</span></div>
+    <div>proposed ${esc(short(x.proposed_value.data))} <span class="arrow">vs</span> current ${esc(short(x.current_value ? x.current_value.data : "?"))}</div>
+    <div class="acts">${btn("accept", x.id)}${btn("reject", x.id)}
+      <span class="note">accept replaces the current value with this proposal</span></div>
+  </div>`).join("") || `<div class="empty">queue empty: stale writes land here instead of overwriting</div>`;
+}
+$("#pending").onclick = (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  const act = b.dataset.act, id = Number(b.dataset.id);
+  if (armed && armed.act === act && armed.id === id && Date.now() <= armed.until) {
+    armed = null; run(`${act} ${id}`);
+  } else {
+    armed = { act, id, until: Date.now() + 3000 };
+    b.classList.add("armed"); b.textContent = `confirm ${act}?`;
+    setTimeout(() => { if (armed && armed.id === id && Date.now() > armed.until) { armed = null; poll(); } }, 3100);
+  }
+};
+$("#showtr").onchange = poll;
+
+function renderNs(list) {
+  const sel = $("#ns"), cur = sel.value || compose.ns;
+  const opts = list.slice().sort((a, b) => (a === "" ? -1 : b === "" ? 1 : b.localeCompare(a)));
+  const html = opts.map((n) => `<option value="${esc(n)}">${n === "" ? "default (memorable)" : esc(n)}</option>`).join("");
+  if (sel.dataset.h !== html) { sel.innerHTML = html; sel.dataset.h = html; sel.value = cur; }
+}
+
+/* ---------- run view ---------- */
+const ROLES = ["builder", "mover", "deployer"];
+const CASES = [
+  ["insert", "if key is new", "creates it at v1"],
+  ["noop", "if error(value, memory) = 0", "revalidated: nothing written, version unchanged"],
+  ["append", "if key is a set", "adds a member, version +1"],
+  ["overwrite", "if error > 0 and version matches", "replaces it, version +1, old value kept in the log"],
+  ["queue", "if the writer's version is stale", "blocked: not applied, waits for review"],
+];
+let runTimer = null, mode = "cursor", lastCounts = {};
+try { mode = localStorage.getItem("dm.mode") || "cursor"; } catch {}
+
+function setMode(m) {
+  mode = m; try { localStorage.setItem("dm.mode", m); } catch {}
+  document.querySelectorAll(".seg button").forEach((b) => b.setAttribute("aria-checked", b.dataset.mode === m));
+}
+document.querySelectorAll(".seg button").forEach((b) => b.onclick = () => setMode(b.dataset.mode));
+setMode(mode);
+
+async function pollRun() {
+  let r;
+  try { r = await (await fetch("/api/run")).json(); } catch { return; }
+  renderRun(r);
+  if (r.status !== "running" && runTimer) { clearInterval(runTimer); runTimer = null; poll(); }
+}
+
+function hlLine(l) {
+  const cls = /→ (CORRECTED|APPENDED|INSERTED|IMPLIED)|deployed/.test(l) ? "hl-ok" : /→ CONFLICT|exit [1-9]|error/.test(l) ? "hl-warn"
+    : /→ NOOP/.test(l) ? "hl-cmd" : /^\d\d:\d\d:\d\d \$ /.test(l) ? "hl-info" : /» /.test(l) ? "hl-cmd" : "";
+  return cls ? `<span class="${cls}">${esc(l)}</span>` : esc(l);
+}
+
+function renderRun(r) {
+  $("#go").disabled = r.status === "running";
+  document.querySelectorAll(".seg button").forEach((b) => b.disabled = r.status === "running");
+  if (r.rid) $("#task").textContent = `ship release ${r.rid} of deploy-demo`;
+  const narr = { idle: "press run", creating: "superset ws create ×3 …",
+    running: `agents working in parallel (${r.mode === "cursor" ? "real Cursor agents" : "scripted"}) …`,
+    done: `finished: all ${r.checks.length} checks passed`,
+    failed: r.checks.length ? `finished: ${r.checks.filter((c) => c.ok).length} of ${r.checks.length} checks passed` : "run failed" }[r.phase] || "";
+  $("#narr").innerHTML = `${esc(narr)}${r.status !== "idle" ? ` <span class="note">${r.elapsed}s</span>` : ""}`;
+
+  // lanes: each workspace's real terminal
+  $("#lanes").innerHTML = ROLES.map((role) => {
+    const sc = r.screens[role];
+    const lines = sc ? sc.lines.filter((l) => /^\d\d:\d\d:\d\d /.test(l)) : [];
+    const head = sc ? `<b>${esc(sc.workspace)}</b><span class="note">superset workspace ${esc(sc.workspace_id.slice(0, 8))} · terminal read ${esc(sc.read_at)}</span>`
+      : `<b>${role}</b><span class="note">${r.phase === "idle" ? "idle" : "starting its workspace…"}</span>`;
+    return `<div class="lane"><div class="lh">${head}</div><pre class="term" data-role="${role}">${lines.map(hlLine).join("\n")}</pre></div>`;
+  }).join("");
+  document.querySelectorAll(".lane .term").forEach((t) => t.scrollTop = t.scrollHeight);
+
+  // piecewise delta rule
+  $("#cases").innerHTML = CASES.map(([k, cond, eff]) => {
+    const b = r.branches[k] || { count: 0, last: null };
+    const flash = (lastCounts[k] || 0) < b.count ? "flash" : "";
+    const hit = b.last ? `${b.last.t} ${b.last.who}: ${b.last.key}${b.last.value !== "" ? " = " + JSON.stringify(b.last.value) : ""}` : "";
+    return `<div class="case b-${k} ${b.count ? "on" : ""} ${flash}"><span class="nm">${k === "noop" ? "no-op" : k}</span>
+      <span class="cond">${esc(cond)}</span><span class="n">×${b.count}</span>
+      <span></span><span class="eff">${esc(eff)}</span><span></span>
+      <span class="hit">${esc(hit)}</span></div>`;
+  }).join("");
+  lastCounts = Object.fromEntries(Object.entries(r.branches).map(([k, v]) => [k, v.count]));
+
+  // implied understanding
+  const im = r.implied, order = ["source", "image", "registry", "cluster"];
+  const by = {}; (im ? im.steps : []).forEach((s) => by[s.src] = s);
+  $("#chain").innerHTML = order.map((n, i) => {
+    const node = `<span class="node2 ${i === 0 ? "start" : i === order.length - 1 ? "end" : ""} ${(i === 0 ? by[n] : by[order[i - 1]]) ? "" : "ghost"}">${n}</span>`;
+    if (i === order.length - 1) return node;
+    const st = by[n];
+    return node + `<span class="arr"><span class="by">${st ? esc(st.by) : "…"}</span><span class="line">──${st ? "▶" : "·"}</span></span>`;
+  }).join("");
+  $("#impl").innerHTML = im && im.found ? `
+      <div class="big">source ⇢ <b>cluster</b> · implied, never stored by any agent</div>
+      <div class="note">composite operator S³ applied to source lands on ${esc(im.operator.lands_on)} (score ${im.operator.score})</div>
+      <div class="note">plain recall of source returns only ${esc(im.recall.state || "∅")}: retrieval alone never reaches cluster</div>`
+    : `<div class="note">${im ? "waiting for all three steps…" : "the agents will record source → image → registry → cluster"}</div>`;
+
+  // memory now
+  $("#facts").innerHTML = r.facts.map((f) => `<tr><td>${esc(f.key)}</td>
+    <td class="v">${esc(JSON.stringify(f.value))}</td><td class="note">v${f.version}</td>
+    <td class="note">${f.cardinality === "multi" ? "set" : "single"}</td><td class="note">last write ${esc(f.source)}</td></tr>`).join("")
+    || `<tr><td class="empty">press run</td></tr>`;
+
+  $("#checks").innerHTML = r.checks.map((c) =>
+    `<div><span class="${c.ok ? "pass" : "fail"}">${c.ok ? "✓" : "✗"}</span><span>${esc(c.text)}</span></div>`).join("")
+    + (r.error ? `<pre class="fail">${esc(r.error)}</pre>` : "");
+
+  $("#calls").innerHTML = r.log.map((c) => `<tr class="r-${c.branch || ""}"><td class="note">${esc(c.t)}</td><td class="note">#${c.seq}</td>
+    <td>${esc(c.client)}</td><td class="w">${esc(c.tool)}(${esc(c.args)})</td><td class="res">→ ${esc(c.result)}</td></tr>`).join("");
+}
+
+$("#go").onclick = async () => {
+  $("#go").disabled = true; lastCounts = {};
+  const res = await fetch("/api/run", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode }) });
+  if (!res.ok) print("err", (await res.json()).error || "could not start run");
+  if (!runTimer) runTimer = setInterval(pollRun, 500);
+  pollRun();
+};
+
+/* ---------- compose view ---------- */
+async function loadCompose() {
+  const q = new URLSearchParams({ ns: compose.ns, start: compose.start, goal: compose.goal });
+  const r = await (await fetch(`/api/compose?${q}`)).json();
+  renderTrace(r); renderGrids(r);
+}
+
+function renderTrace(r) {
+  if (!r.contexts.length) { $("#trace").innerHTML = `<div class="empty">namespace ${esc(r.namespace || "default")} has no transitions</div>`; return; }
+  let h = `<div class="note">namespace ${esc(r.namespace || "default")} · contexts ${r.contexts.map(esc).join(", ")}</div><br>`;
+  if (r.path.length) {
+    h += `<div class="node start">${esc(r.path[0].src)}</div>`;
+    r.path.forEach((p, i) => {
+      const last = i === r.path.length - 1;
+      h += `<div class="edge">│ ${p.context !== "default" ? `<span class="ctxn">[${esc(p.context)}]</span> ` : ""}score ${p.score.toFixed(3)} <span class="ep">${esc(p.episodes.join(", "))}</span></div>
+            <div class="edge">↓</div><div class="node ${last ? "goal" : ""}">${esc(p.dst)}</div>`;
+    });
+  } else h += `<div class="warn" style="color:var(--warn)">no path ${esc(r.start)} → ${esc(r.goal || "…")}</div>`;
+  h += `<div class="check">`;
+  (r.one_hop || []).forEach((o) => h += `<div><span class="note">one-hop recall [${esc(o.context)}]</span>
+     ${esc(r.start)} → ${o.state && o.score > 0.5 ? esc(o.state) : "∅"} <span class="note">(${o.score.toFixed(3)})</span></div>`);
+  if (r.goal && r.path.length > 1) {
+    const direct = (r.one_hop || []).some((o) => o.state === r.goal && o.score > 0.5);
+    h += `<div><span class="${direct ? "fail" : "pass"}">${direct ? "✗" : "✓"}</span> retrieval alone never returns ${esc(r.goal)}</div>`;
+  }
+  if (r.operator) h += `<div><span class="${r.operator.agrees ? "pass" : "fail"}">${r.operator.agrees ? "✓" : "✗"}</span>
+     composite operator on ${esc(r.start)} → ${esc(r.operator.lands_on)} <span class="note">(${r.operator.score.toFixed(3)}, no clean-up)</span></div>`;
+  $("#trace").innerHTML = h + `</div>`;
+}
+
+function renderGrids(r) {
+  const st = r.states || [], n = st.length;
+  if (!n || !r.grids.length) { $("#grids").innerHTML = ""; $("#legend").innerHTML = ""; return; }
+  const idx = Object.fromEntries(st.map((s, i) => [s, i]));
+  const pathCells = new Set(r.path.map((p) => `${idx[p.src]},${idx[p.dst]}`));
+  const goalCell = r.path.length ? `${idx[r.path[0].src]},${idx[r.path[r.path.length - 1].dst]}` : "";
+  $("#grids").innerHTML = r.grids.map((g, gi) => {
+    let cells = `<div></div>` + st.map((_, j) => `<div class="lab col">${j}</div>`).join("");
+    g.grid.forEach((row, i) => {
+      cells += `<div class="lab" title="${esc(st[i])}">${i} ${esc(st[i])}</div>`;
+      row.forEach((v, j) => {
+        const a = Math.max(0, Math.min(1, v)), key = `${i},${j}`;
+        const cls = [a > 0.5 ? "hot" : "", gi === 0 && pathCells.has(key) ? "path" : "", gi === 1 && key === goalCell ? "goal" : ""].join(" ");
+        cells += `<div class="c ${cls}" title="${esc(st[i])} → ${esc(st[j])}: ${v.toFixed(3)}"
+          style="background:rgb(var(--ok-bg) / ${(a * 0.9).toFixed(3)})">${a > 0.5 ? v.toFixed(2) : ""}</div>`;
+      });
+    });
+    return `<div class="grid"><h4><b>${esc(g.label)}</b></h4>
+      <div class="hm" style="grid-template-columns: minmax(8ch, 14ch) repeat(${n}, minmax(0, 1fr))">${cells}</div></div>`;
+  }).join("");
+  $("#legend").innerHTML = `cell = how strongly key state (row) maps to value state (col). <span>blue outline</span> = stored hop on the path ·
+    <span>amber outline</span> = start → goal, present only in the composed operator. Values are unit-scale projections; unrelated pairs sit near 1/√d.`;
+}
+
+$("#ns").onchange = () => { compose.ns = $("#ns").value; loadCompose(); };
+$("#cgo").onclick = () => { compose = { ns: $("#ns").value, start: $("#cstart").value, goal: $("#cgoal").value }; loadCompose(); };
+$("#cdemo").onclick = () => run("demo");
+
+/* ---------- terminal ---------- */
+const out = $("#out"), input = $("#in");
+let hist = [], hi = 0;
+try { hist = JSON.parse(localStorage.getItem("dm.hist") || "[]"); } catch {} hi = hist.length;
+
+function print(cls, text) { const d = document.createElement("div"); d.className = cls; d.textContent = text; out.appendChild(d); out.scrollTop = out.scrollHeight; }
+
+async function run(line) {
+  print("cmd", line);
+  if (line.trim() && hist[hist.length - 1] !== line) { hist.push(line); hist = hist.slice(-100); try { localStorage.setItem("dm.hist", JSON.stringify(hist)); } catch {} }
+  hi = hist.length;
+  if (line.trim() === "race") print("dim", "launching race_orchestrator.py: two client processes, same slot, same expected_version…");
+  try {
+    const r = await (await fetch("/api/cmd", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ line }) })).json();
+    if (r.clear) out.innerHTML = "";
+    r.lines.forEach(([c, t]) => print(c, t));
+    if (r.compose) {
+      compose = r.compose; $("#cstart").value = compose.start; $("#cgoal").value = compose.goal;
+      await poll(); $("#ns").value = compose.ns; view("compose");
+    } else poll();
+  } catch (e) { print("err", `request failed: ${e}`); }
+}
+
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { const v = input.value; input.value = ""; if (v.trim()) run(v); }
+  else if (e.key === "ArrowUp") { if (hi > 0) input.value = hist[--hi]; e.preventDefault(); }
+  else if (e.key === "ArrowDown") { hi = Math.min(hist.length, hi + 1); input.value = hist[hi] || ""; e.preventDefault(); }
+});
+document.addEventListener("keydown", (e) => {
+  if (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "SELECT") return;
+  if (e.key === "/") { input.focus(); e.preventDefault(); }
+  if (e.key === "1") view("run"); if (e.key === "2") view("memory"); if (e.key === "3") view("compose");
+});
+
+print("dim", "delta memory console · symbolic, versioned facts; every change is a logged correction. type help.");
+poll(); setInterval(poll, 1000); pollRun();
+fetch("/api/run").then((r) => r.json()).then((r) => { if (r.status === "running" && !runTimer) runTimer = setInterval(pollRun, 400); });
+</script>
+</body>
+</html>

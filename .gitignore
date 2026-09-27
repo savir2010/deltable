@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.db
+*.db-shm
+*.db-wal
+server_calls.jsonl
+.memorable_procedure_cache.json
+demo/_workspace/
+.mcp.json
+.DS_Store
+!examples/deploy-demo/.mcp.json
+config.bat
+node_modules

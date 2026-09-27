@@ -1,0 +1,1 @@
+../delta_memory/store/postgres_schema.sql

@@ -1,0 +1,102 @@
+#!/Users/savirdillikar/yc-hack/delta-memory/.venv/bin/python
+"""Delta Memory from the shell, for any agent (Codex, Cursor, Superset workspaces, ...).
+
+Talks to the SAME live MCP server as .mcp.json (http://127.0.0.1:8787/mcp).
+
+  tools/dm read deploy_script path
+  tools/dm write deploy_script path scripts/release/deploy.sh --expected-version 1 --source tool_call:agent_A
+  tools/dm history deploy_script path
+  tools/dm wait deploy_script path --newer-than 1 --timeout 300
+  tools/dm write release_42 agents builder --cardinality multi      (a set: appends)
+  tools/dm relate source image --ns r42 --episode builder            (record a step)
+  tools/dm compose source cluster --ns r42                           (implied path?)
+"""
+import argparse, asyncio, json, os, sys, time
+
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+from mcp.types import Implementation
+
+URL = os.environ.get("DELTA_MEMORY_URL", "http://127.0.0.1:8787/mcp")
+
+
+async def call(tool, **args):
+    async with streamablehttp_client(URL) as (r, w, _):
+        # identify ourselves to the server, so its call log shows who did what
+        name = os.environ.get("DM_AGENT_NAME") or f"dm-cli pid {os.getpid()}"
+        async with ClientSession(r, w, client_info=Implementation(name=name, version="1")) as s:
+            await s.initialize()
+            res = await s.call_tool(tool, args)
+    return json.loads(res.content[0].text)
+
+
+def main():
+    p = argparse.ArgumentParser(prog="dm")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    for name in ("read", "history", "wait"):
+        sp = sub.add_parser(name)
+        sp.add_argument("entity"); sp.add_argument("predicate")
+        if name == "wait":
+            sp.add_argument("--newer-than", type=int, required=True, help="block until version > this")
+            sp.add_argument("--timeout", type=float, default=300)
+    w = sub.add_parser("write")
+    w.add_argument("entity"); w.add_argument("predicate"); w.add_argument("value")
+    w.add_argument("--expected-version", type=int)
+    w.add_argument("--value-type", default=None)
+    who = (os.environ.get("DM_AGENT_NAME") or "agent").split()[0]
+    w.add_argument("--source", default=f"tool_call:{who}")
+    w.add_argument("--cardinality", default="single", choices=["single", "multi"])
+    wm = sub.add_parser("wait-members", help="block until a set slot has at least --count members")
+    wm.add_argument("entity"); wm.add_argument("predicate")
+    wm.add_argument("--count", type=int, required=True); wm.add_argument("--timeout", type=float, default=180)
+    rl = sub.add_parser("relate")
+    rl.add_argument("src"); rl.add_argument("dst")
+    rl.add_argument("--ns", default=""); rl.add_argument("--ctx", default="default")
+    rl.add_argument("--episode", default=os.environ.get("DM_AGENT_NAME", "cli"))
+    cp = sub.add_parser("compose")
+    cp.add_argument("start"); cp.add_argument("goal", nargs="?")
+    cp.add_argument("--ns", default="")
+    a = p.parse_args()
+
+    if a.cmd == "read":
+        out = asyncio.run(call("delta_read", entity_id=a.entity, predicate=a.predicate))
+    elif a.cmd == "history":
+        out = asyncio.run(call("delta_history", entity_id=a.entity, predicate=a.predicate))
+    elif a.cmd == "wait":
+        deadline = time.time() + a.timeout
+        while True:
+            out = asyncio.run(call("delta_read", entity_id=a.entity, predicate=a.predicate))
+            if out.get("found") and out["version"] > a.newer_than:
+                break
+            if time.time() > deadline:
+                print(json.dumps({"timeout": True, **out})); sys.exit(2)
+            time.sleep(1)
+    elif a.cmd == "wait-members":
+        deadline = time.time() + a.timeout
+        while True:
+            out = asyncio.run(call("delta_read", entity_id=a.entity, predicate=a.predicate))
+            if out.get("found") and len(out["value"]["data"]) >= a.count:
+                break
+            if time.time() > deadline:
+                print(json.dumps({"timeout": True, **out})); sys.exit(2)
+            time.sleep(0.5)
+    elif a.cmd == "relate":
+        out = asyncio.run(call("delta_relate", src=a.src, dst=a.dst, context=a.ctx,
+                               episode=a.episode, namespace=a.ns))
+        out = {k: out[k] for k in ("status", "message") if k in out}
+    elif a.cmd == "compose":
+        args = dict(start=a.start, namespace=a.ns)
+        if a.goal: args["goal"] = a.goal
+        out = asyncio.run(call("delta_compose", **args))
+    else:
+        args = dict(entity_hint=a.entity, predicate_hint=a.predicate, value=a.value, source=a.source,
+                    cardinality=a.cardinality)
+        if a.expected_version is not None: args["expected_version"] = a.expected_version
+        if a.value_type: args["value_type"] = a.value_type
+        out = asyncio.run(call("delta_write", **args))
+        out.pop("server", None)
+    print(json.dumps(out, indent=2))
+
+
+if __name__ == "__main__":
+    main()
