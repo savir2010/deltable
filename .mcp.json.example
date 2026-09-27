@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "delta-memory": {
+      "command": "/Users/savirdillikar/yc-hack/delta-memory/.venv/bin/delta-memory-mcp",
+      "env": {
+        "DELTA_MEMORY_DB": "/Users/savirdillikar/yc-hack/delta-memory/delta_memory.db"
+      }
+    }
+  }
+}
